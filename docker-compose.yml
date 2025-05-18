@@ -1,0 +1,190 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14
+    container_name: dms-postgres
+    environment:
+      POSTGRES_USER: dmsuser
+      POSTGRES_PASSWORD: dmspassword
+      POSTGRES_DB: dms
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - dms-network
+
+  # Kafka and Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    container_name: dms-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks:
+      - dms-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    container_name: dms-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - dms-network
+
+  # LocalStack (S3 mock for local development)
+  localstack:
+    image: localstack/localstack:latest
+    container_name: dms-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+    volumes:
+      - localstack-data:/tmp/localstack
+    networks:
+      - dms-network
+
+  # Authentication Service (Spring Boot)
+  auth-service:
+    build: ./auth-service
+    container_name: dms-auth-service
+    ports:
+      - "8081:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/dms
+      - SPRING_DATASOURCE_USERNAME=dmsuser
+      - SPRING_DATASOURCE_PASSWORD=dmspassword
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - JWT_SECRET=8f7d56a1e2b9c3f4d5e6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8
+      - JWT_EXPIRATION=86400000
+    depends_on:
+      - postgres
+      - kafka
+    networks:
+      - dms-network
+
+  # Document Service (Spring Boot)
+  document-service:
+    build: ./document-service
+    container_name: dms-document-service
+    ports:
+      - "8082:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/dms
+      - SPRING_DATASOURCE_USERNAME=dmsuser
+      - SPRING_DATASOURCE_PASSWORD=dmspassword
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - AUTH_SERVICE_URL=http://auth-service:8080
+      - STORAGE_SERVICE_URL=http://storage-service:8000
+      - TRANSLATION_SERVICE_URL=http://translation-service:8000
+    depends_on:
+      - postgres
+      - kafka
+      - auth-service
+    networks:
+      - dms-network
+
+  # Storage Service (FastAPI)
+  storage-service:
+    build: ./storage-service
+    container_name: dms-storage-service
+    ports:
+      - "8083:8000"
+    environment:
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_REGION=us-east-1
+      - S3_BUCKET_NAME=dms-documents
+      - AUTH_SERVICE_URL=http://auth-service:8080
+    depends_on:
+      - localstack
+      - auth-service
+    networks:
+      - dms-network
+
+  # Translation Service (FastAPI)
+  translation-service:
+    build: ./translation-service
+    container_name: dms-translation-service
+    ports:
+      - "8084:8000"
+    environment:
+      - GEMINI_API_KEY=AIzaSyA_4UPsqvFSOXMpD6Xm6vDMUlX5kiUAOjo
+      - AUTH_SERVICE_URL=http://auth-service:8080
+    depends_on:
+      - auth-service
+    networks:
+      - dms-network
+
+  # Department Service (Python/FastAPI)
+  department-service:
+    build: ./department-service
+    container_name: dms-department-service
+    ports:
+      - "8085:8000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=dmsuser
+      - POSTGRES_PASSWORD=dmspassword
+      - POSTGRES_DB=dms
+      - AUTH_SERVICE_URL=http://auth-service:8080
+    depends_on:
+      - postgres
+      - auth-service
+    networks:
+      - dms-network
+
+  # API Gateway (Python/FastAPI)
+  api-gateway:
+    build: ./api-gateway
+    container_name: dms-api-gateway
+    ports:
+      - "8080:8000"
+    environment:
+      - AUTH_SERVICE_URL=http://auth-service:8080
+      - DOCUMENT_SERVICE_URL=http://document-service:8080
+      - STORAGE_SERVICE_URL=http://storage-service:8000
+      - TRANSLATION_SERVICE_URL=http://translation-service:8000
+      - DEPARTMENT_SERVICE_URL=http://department-service:8000
+    depends_on:
+      - auth-service
+      - document-service
+      - storage-service
+      - translation-service
+      - department-service
+    networks:
+      - dms-network
+
+  # Frontend (React)
+  frontend:
+    build: ./frontend
+    container_name: dms-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - dms-network
+
+networks:
+  dms-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  localstack-data:
