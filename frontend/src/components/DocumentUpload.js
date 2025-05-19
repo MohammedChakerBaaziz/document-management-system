@@ -48,24 +48,41 @@ const DocumentUpload = ({ userDepartments, userId }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
+    // Reset states
+    setError('');
+    setSuccess('');
+    
     // Validation
-    if (!title || !categoryId || !departmentId || !file) {
-      setError('Please fill in all fields and select a file');
+    const validationErrors = [];
+    if (!title) validationErrors.push('Title is required');
+    if (!categoryId) validationErrors.push('Category is required');
+    if (!departmentId) validationErrors.push('Department is required');
+    if (!file) validationErrors.push('File is required');
+    
+    if (validationErrors.length > 0) {
+      setError(validationErrors.join(', '));
       return;
     }
     
     try {
       setLoading(true);
-      setError('');
-      setSuccess('');
       
       // Step 1: Upload file to storage service
-      const uploadResponse = await storageService.uploadFile(file);
+      let uploadResponse;
+      try {
+        uploadResponse = await storageService.uploadFile(file);
+      } catch (uploadErr) {
+        throw new Error(
+          uploadErr.response?.data?.message ||
+          'Failed to upload file. Please try again.'
+        );
+      }
+      
       const fileData = uploadResponse.data;
       
       // Step 2: Create document metadata
       const documentData = {
-        title,
+        title: title.trim(),
         categoryId: parseInt(categoryId),
         departmentId: parseInt(departmentId),
         fileKey: fileData.fileKey,
@@ -74,22 +91,31 @@ const DocumentUpload = ({ userDepartments, userId }) => {
         fileSize: fileData.fileSize
       };
       
-      await documentService.createDocument(documentData);
+      try {
+        await documentService.createDocument(documentData);
+      } catch (docErr) {
+        // If document creation fails, we should ideally clean up the uploaded file
+        // This would require adding a delete method to the storage service
+        throw new Error(
+          docErr.response?.data?.message ||
+          docErr.response?.data?.detail ||
+          'Failed to create document. Please try again.'
+        );
+      }
       
       // Reset form
       setTitle('');
       setCategoryId('');
       setDepartmentId('');
       setFile(null);
+      if (e.target.querySelector('input[type=file]')) {
+        e.target.querySelector('input[type=file]').value = '';
+      }
       
       setSuccess('Document uploaded successfully!');
     } catch (err) {
-      setError(
-        err.response?.data?.message || 
-        err.response?.data?.detail || 
-        'Failed to upload document. Please try again.'
-      );
-      console.error(err);
+      setError(err.message || 'An unexpected error occurred. Please try again.');
+      console.error('Document upload error:', err);
     } finally {
       setLoading(false);
     }

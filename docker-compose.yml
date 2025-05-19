@@ -111,8 +111,14 @@ services:
       - S3_BUCKET_NAME=dms-documents
       - AUTH_SERVICE_URL=http://auth-service:8080
     depends_on:
-      - localstack
       - auth-service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: always
     networks:
       - dms-network
 

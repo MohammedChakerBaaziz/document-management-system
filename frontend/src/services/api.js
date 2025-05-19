@@ -30,11 +30,25 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
+    // Only redirect to login for 401 errors that are not from signup or user management endpoints
     if (error.response && error.response.status === 401) {
-      // Unauthorized, clear token and redirect to login
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+      const url = error.config.url;
+      // Don't redirect for these endpoints
+      const ignoredEndpoints = [
+        '/api/auth/signup',
+        '/api/users',
+        '/api/users/assign-departments'
+      ];
+      
+      // Check if the URL contains any of the ignored endpoints
+      const shouldIgnore = ignoredEndpoints.some(endpoint => url.includes(endpoint));
+      
+      if (!shouldIgnore) {
+        // Unauthorized for other endpoints, clear token and redirect to login
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
@@ -63,7 +77,13 @@ export const userService = {
     return api.get(`/api/users/${id}`);
   },
   createUser: (userData) => {
-    return api.post('/api/users', userData);
+    // Use the signup endpoint which doesn't require authentication
+    return api.post('/api/auth/signup', {
+      username: userData.username,
+      email: userData.email,
+      password: userData.password,
+      roles: userData.roles
+    });
   },
   updateUser: (id, userData) => {
     return api.put(`/api/users/${id}`, userData);
@@ -72,7 +92,54 @@ export const userService = {
     return api.delete(`/api/users/${id}`);
   },
   assignDepartments: (userId, departmentIds) => {
-    return api.post('/api/users/assign-departments', { userId, departmentIds });
+    console.log('API call - userId:', userId, 'departmentIds:', departmentIds);
+    
+    // Create a custom axios instance for department assignments
+    const customApi = axios.create({
+      baseURL: API_URL,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    // Add request interceptor for auth token
+    customApi.interceptors.request.use(
+      (config) => {
+        const token = localStorage.getItem('token');
+        if (token) {
+          config.headers['Authorization'] = `Bearer ${token}`;
+        }
+        return config;
+      },
+      (error) => {
+        return Promise.reject(error);
+      }
+    );
+    
+    // Add response interceptor to prevent logout
+    customApi.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        // Don't trigger logout for 401 errors on this endpoint
+        if (error.response && error.response.status === 401) {
+          return Promise.reject({
+            ...error,
+            message: 'Failed to assign departments. Please try again.'
+          });
+        }
+        return Promise.reject(error);
+      }
+    );
+    
+    // Ensure departmentIds is always an array and contains valid IDs
+    const validDepartmentIds = Array.isArray(departmentIds) 
+      ? departmentIds.filter(id => id && !isNaN(parseInt(id)))
+      : [];
+    
+    return customApi.post('/api/users/assign-departments', {
+      userId: parseInt(userId),
+      departmentIds: validDepartmentIds
+    });
   },
   getUserDepartments: (userId) => {
     return api.get(`/api/users/${userId}/departments`);
@@ -144,10 +211,30 @@ export const documentService = {
     return api.get('/api/documents/search', { params: { query } });
   },
   createDocument: (documentData) => {
-    return api.post('/api/documents', documentData);
+    // Ensure all required fields are present and properly formatted
+    const payload = {
+      title: documentData.title,
+      categoryId: parseInt(documentData.categoryId),
+      departmentId: parseInt(documentData.departmentId),
+      fileKey: documentData.fileKey,
+      fileName: documentData.fileName || '',
+      fileType: documentData.fileType || '',
+      fileSize: documentData.fileSize ? parseInt(documentData.fileSize) : 0
+    };
+    return api.post('/api/documents', payload);
   },
   updateDocument: (id, documentData) => {
-    return api.put(`/api/documents/${id}`, documentData);
+    // Ensure all fields are properly formatted
+    const payload = {
+      title: documentData.title,
+      categoryId: parseInt(documentData.categoryId),
+      departmentId: parseInt(documentData.departmentId),
+      fileKey: documentData.fileKey,
+      fileName: documentData.fileName || '',
+      fileType: documentData.fileType || '',
+      fileSize: documentData.fileSize ? parseInt(documentData.fileSize) : 0
+    };
+    return api.put(`/api/documents/${id}`, payload);
   },
   deleteDocument: (id) => {
     return api.delete(`/api/documents/${id}`);

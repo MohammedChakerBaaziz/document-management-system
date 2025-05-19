@@ -172,18 +172,39 @@ const UserManagement = () => {
   };
 
   const handleOpenDeptDialog = async (user) => {
+    if (!user || !user.id) {
+      setError('Invalid user selected');
+      return;
+    }
+
     try {
       setLoading(true);
-      setUserForDept(user);
+      setError('');
+      setSuccess('');
+      
+      // First verify the user exists
+      try {
+        await userService.getUserById(user.id);
+      } catch (userErr) {
+        throw new Error('Selected user no longer exists');
+      }
       
       // Get user's departments
-      const response = await userService.getUserDepartments(user.id);
-      setUserDepartments(response.data.map(dept => dept.id));
+      try {
+        const response = await userService.getUserDepartments(user.id);
+        const departments = Array.isArray(response.data) ? response.data : [];
+        setUserDepartments(departments.map(dept => dept.id));
+        console.log('Loaded departments for user:', departments);
+      } catch (deptErr) {
+        console.error('Error fetching user departments:', deptErr);
+        setUserDepartments([]);
+      }
       
+      setUserForDept(user);
       setOpenDeptDialog(true);
     } catch (err) {
-      setError('Failed to load user departments');
-      console.error(err);
+      console.error('Dialog open error:', err);
+      setError(err.message || 'Failed to prepare department assignment dialog');
     } finally {
       setLoading(false);
     }
@@ -200,16 +221,54 @@ const UserManagement = () => {
   };
 
   const handleSaveDepartments = async () => {
+    if (!userForDept) {
+      setError('No user selected for department assignment');
+      return;
+    }
+
     try {
       setLoading(true);
+      setError('');
+      setSuccess('');
       
-      await userService.assignDepartments(userForDept.id, userDepartments);
+      // Validate and format department IDs
+      const departmentIds = Array.isArray(userDepartments)
+        ? userDepartments.filter(id => id && !isNaN(parseInt(id)))
+        : [];
       
-      setSuccess('Departments assigned successfully');
-      handleCloseDeptDialog();
+      console.log('Assigning departments:', departmentIds, 'to user:', userForDept.id);
+      
+      try {
+        // First verify the user still exists
+        await userService.getUserById(userForDept.id);
+        
+        // Then assign departments
+        await userService.assignDepartments(userForDept.id, departmentIds);
+        
+        setSuccess('Departments assigned successfully');
+        
+        // Refresh user list in the background
+        userService.getAllUsers()
+          .then(response => {
+            setUsers(response.data);
+          })
+          .catch(err => {
+            console.error('Background refresh error:', err);
+          });
+        
+        handleCloseDeptDialog();
+      } catch (apiErr) {
+        console.error('Department assignment error:', apiErr);
+        throw new Error(
+          apiErr.message || 
+          apiErr.response?.data?.detail || 
+          'Failed to assign departments. Please try again.'
+        );
+        // Don't close the dialog on error so user can try again
+      }
     } catch (err) {
-      setError('Failed to assign departments');
-      console.error(err);
+      console.error('Unexpected error in handleSaveDepartments:', err);
+      setError('An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
     }
